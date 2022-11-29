@@ -1,22 +1,25 @@
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import FileResponse
 
 from app.api import (
+    admins,
     authentications,
     carts,
     categories,
     homes,
-    images,
     orders,
     products,
-    sales,
+    searches,
     users,
+    wishlists,
 )
 from app.core.config import settings
 from app.core.logger import logger
@@ -27,10 +30,12 @@ def create_app():
     description = f"{settings.PROJECT_NAME} API"
     app = FastAPI(
         title=settings.PROJECT_NAME,
+        servers=[{"url": settings.REACT_APP_BACKEND_URL}],
         openapi_url=f"{settings.API_PATH}/openapi.json",
-        docs_url="/docs/",
+        docs_url="/swagger",
         description=description,
-        redoc_url="/redoc/",
+        version=settings.VERSION,
+        redoc_url="/redoc",
     )
 
     @app.exception_handler(StarletteHTTPException)
@@ -56,6 +61,7 @@ def create_app():
     setup_routers(app)
     init_db_hooks(app)
     setup_cors_middleware(app)
+    setup_gzip_middleware(app)
     serve_static_app(app)
 
     return app
@@ -73,9 +79,14 @@ def setup_routers(app: FastAPI) -> None:
         tags=["User"],
     )
     app.include_router(
-        images.router,
-        prefix=f"{settings.API_PATH}/image",
-        tags=["Image"],
+        wishlists.router,
+        prefix=f"{settings.API_PATH}/wishlist",
+        tags=["Wishlist"],
+    )
+    app.include_router(
+        searches.router,
+        prefix=f"{settings.API_PATH}",
+        tags=["Search"],
     )
     app.include_router(
         homes.router,
@@ -98,14 +109,14 @@ def setup_routers(app: FastAPI) -> None:
         tags=["Cart"],
     )
     app.include_router(
-        sales.router,
-        prefix=f"{settings.API_PATH}",
-        tags=["Sales"],
-    )
-    app.include_router(
         orders.router,
         prefix=f"{settings.API_PATH}",
         tags=["Order"],
+    )
+    app.include_router(
+        admins.router,
+        prefix=f"{settings.API_PATH}/admin",
+        tags=["Dashboard"],
     )
 
     # The following operation needs to be at the end of this function
@@ -114,16 +125,21 @@ def setup_routers(app: FastAPI) -> None:
 
 def serve_static_app(app):
     app.mount("/", StaticFiles(directory="static"), name="static")
+    templates = Jinja2Templates(directory="static")
 
     @app.middleware("http")
     async def _add_404_middleware(request: Request, call_next):
         """Serves static assets on 404"""
         response = await call_next(request)
         path = request["path"]
-        if path.startswith(settings.API_PATH) or path.startswith("/docs"):
+        if path.startswith(settings.API_PATH):
             return response
         if response.status_code == 404:
-            return FileResponse("static/index.html")
+            # remove path and query string
+            return templates.TemplateResponse(
+                "index.html",
+                {"request": request, "host": settings.REACT_APP_BACKEND_URL},
+            )
         return response
 
 
@@ -137,6 +153,10 @@ def setup_cors_middleware(app):
             expose_headers=["Content-Range", "Range"],
             allow_headers=["Authorization", "Range", "Content-Range"],
         )
+
+
+def setup_gzip_middleware(app):
+    app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 def use_route_names_as_operation_ids(app: FastAPI) -> None:
@@ -165,7 +185,6 @@ def init_db_hooks(app: FastAPI) -> None:
         Query, "before_compile", retval=True, bake_ok=True, propagate=True
     )
     def no_deleted(query):
-        # disable limit
         query._enable_assertions = False
         for desc in query.column_descriptions:
             entity = desc["entity"]

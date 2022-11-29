@@ -1,26 +1,25 @@
-import { Dialog, Transition } from '@headlessui/react';
 import { Fragment, useCallback, useEffect, useState } from 'react';
-
-import Button from '../button/Button';
-import BagIcon from '../../assets/icons/BagIcon';
-import Item from './Item';
-import LinkButton from '../button/LinkButton';
-import { roundDecimal } from '../util/utilFunc';
-import { useCart } from '../../context/cart/CartProvider';
+import { HiOutlineShoppingBag } from 'react-icons/hi';
 import { useNavigate } from 'react-router-dom';
+
+import { Dialog, Transition } from '@headlessui/react';
+
+import { useCart } from '../../context/CartContext';
+import Button from '../button/Button';
+import { convertToCurrency, roundDecimal } from '../util/utilFunc';
+import Item from './Item';
 
 export default function CartItem() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [animate, setAnimate] = useState('');
-  const { cart, addOne, removeItem, deleteItem } = useCart();
+  const { cart, updateCartItem, deleteCartItem } = useCart();
 
   let subtotal = 0;
 
-  let noOfItems = 0;
-  cart.forEach((item) => {
-    noOfItems += item.qty!;
-  });
+  const noOfItems = cart.data.reduce((acc, item) => {
+    return acc + item.details.quantity;
+  }, 0);
 
   const handleAnimate = useCallback(() => {
     if (noOfItems === 0) return;
@@ -50,7 +49,7 @@ export default function CartItem() {
     <>
       <div className="relative">
         <button type="button" onClick={openModal} aria-label="Cart">
-          <BagIcon extraClass="h-8 w-8 sm:h-6 sm:w-6" />
+          <HiOutlineShoppingBag className="-mb-[5px] h-8 w-8 sm:h-6 sm:w-6" />
           {noOfItems > 0 && (
             <span
               className={`${animate} absolute -top-3 rounded-full bg-gray-500 py-1 px-2 text-xs text-gray-100`}
@@ -100,7 +99,7 @@ export default function CartItem() {
             >
               <div
                 style={{ height: '100vh' }}
-                className="dur relative inline-block h-screen w-full max-w-md transform overflow-hidden bg-white text-left align-middle shadow-xl transition-all"
+                className="relative inline-block h-screen w-full max-w-md transform overflow-hidden bg-white text-left align-middle shadow-xl transition-all"
               >
                 <div className="bg-lightgreen flex items-center justify-between p-6">
                   <h3 className="text-xl">Cart ({noOfItems})</h3>
@@ -108,48 +107,53 @@ export default function CartItem() {
                     type="button"
                     className="text-3xl outline-none focus:outline-none sm:text-2xl"
                     onClick={closeModal}
-                  >
-                    &#10005;
-                  </button>
+                  ></button>
                 </div>
 
-                <div className="h-full">
-                  <div className="itemContainer h-2/3 w-full flex-shrink flex-grow overflow-y-auto px-4">
-                    {cart.map((item) => {
-                      subtotal += item.price * item.qty!;
+                <div className="flex h-full flex-col place-content-between">
+                  <div className="itemContainer w-full flex-shrink flex-grow overflow-y-scroll px-4">
+                    {cart.data.map((item) => {
+                      subtotal += item.price * item.details.quantity;
                       return (
                         <Item
                           key={item.id}
                           name={item.name}
-                          price={item.price * item.qty!}
-                          qty={item.qty!}
-                          img={item.img1 as string}
-                          onAdd={() => addOne!(item)}
-                          onRemove={() => removeItem!(item)}
-                          onDelete={() => deleteItem!(item)}
+                          price={item.price * item.details.quantity}
+                          quantity={item.details.quantity}
+                          size={item.details.size}
+                          img={item.image}
+                          onAdd={() => {
+                            updateCartItem?.mutate({
+                              id: item.id,
+                              quantity: 1,
+                            });
+                          }}
+                          onRemove={() => {
+                            updateCartItem?.mutate({
+                              id: item.id,
+                              quantity: -1,
+                            });
+                          }}
+                          onDelete={() => {
+                            deleteCartItem?.mutate({
+                              cartId: item.id,
+                            });
+                          }}
                         />
                       );
                     })}
                   </div>
-                  <div className="btnContainer mt-4 mb-20 flex h-1/3 w-full flex-col px-4 ">
+                  <div className="btnContainer mt-4 mb-20 flex min-h-[6rem] w-full flex-col px-4 ">
                     <div className="flex justify-between">
                       <span>Subtotal</span>
-                      <span>$ {roundDecimal(subtotal)}</span>
+                      <span>{convertToCurrency(roundDecimal(subtotal))}</span>
                     </div>
-                    <LinkButton
-                      href="/shopping-cart"
-                      extraClass="my-4"
-                      noBorder={false}
-                      inverted={false}
-                    >
-                      View Cart
-                    </LinkButton>
                     <Button
                       value={'Checkout'}
                       onClick={() => {
                         navigate('/checkout');
                       }}
-                      disabled={cart.length < 1 ? true : false}
+                      disabled={cart.data.length < 1}
                       extraClass="text-center"
                       size="lg"
                     />

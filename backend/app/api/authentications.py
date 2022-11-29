@@ -1,9 +1,10 @@
-import uuid
-from datetime import datetime, timedelta
+import random
+from datetime import datetime
 from typing import Generator
 
 import pytz
-from fastapi import Depends, HTTPException, status
+from fastapi import BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
 from fastapi.security import OAuth2PasswordRequestForm
 
@@ -12,10 +13,11 @@ from app.deps.authentication import (
     create_access_token,
     email_validation,
     get_current_active_user,
+    is_authenticated,
     password_validation,
 )
 from app.deps.db import get_db
-from app.deps.email import send_forgot_password_email
+from app.deps.send_email import send_forgot_password_email
 from app.models.forgot_password import ForgotPassword
 from app.models.user import User
 from app.schemas.authentication import (
@@ -25,16 +27,40 @@ from app.schemas.authentication import (
     UserCreate,
     UserRead,
 )
-from app.schemas.request_params import DefaultResponse
+from app.schemas.default_model import DefaultResponse
 
 router = APIRouter()
+
+
+@router.get(
+    "/role",
+    response_model=DefaultResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {
+            "description": "Return current user role",
+            "content": {"application/json": {"example": {"message": "guest"}}},
+        },
+    },
+)
+def get_role(request: Request) -> JSONResponse:
+    access_token = request.headers.get("Authorization") or ""
+    access_token = access_token.replace("Bearer ", "")
+    role = is_authenticated(access_token)
+    message = "guest"
+    if role is not None:
+        if role is False:
+            message = "user"
+        else:
+            message = "admin"
+    return DefaultResponse(message=message)
 
 
 @router.post("/sign-in", response_model=UserRead, status_code=status.HTTP_200_OK)
 def sign_in(
     request: OAuth2PasswordRequestForm = Depends(),
     session: Generator = Depends(get_db),
-):
+) -> JSONResponse:
     user = session.query(User).filter(User.email == request.username).first()
     if not user:
         raise HTTPException(
@@ -68,7 +94,7 @@ def sign_in(
 def sign_up(
     request: UserCreate,
     session: Generator = Depends(get_db),
-):
+) -> JSONResponse:
     email_validation(request.email)
     password_validation(request.password)
     user = session.query(User).filter(User.email == request.email).first()
@@ -115,8 +141,9 @@ def sign_up(
 )
 async def forgot_password(
     email: str,
+    background_task: BackgroundTasks,
     session: Generator = Depends(get_db),
-):
+) -> JSONResponse:
     user = session.query(User).filter(User.email == email).first()
     if not user:
         raise HTTPException(
@@ -124,7 +151,8 @@ async def forgot_password(
             detail="Email not registered",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    reset_token = str(uuid.uuid4())
+
+    token = str(random.randint(100000, 999999))
 
     # remove old token
     session.query(ForgotPassword).filter(ForgotPassword.user_id == user.id).delete()
@@ -132,30 +160,31 @@ async def forgot_password(
     # send_forgot_password_email
     forgot_password = ForgotPassword(
         user_id=user.id,
-        token=reset_token,
-        expired_at=datetime.now() + timedelta(hours=1),
+        token=token,
     )
     session.add(forgot_password)
     session.commit()
-    await send_forgot_password_email(email, reset_token)
+    background_task.add_task(send_forgot_password_email, email, token)
     return DefaultResponse(
-        message="Reset password link sent to your email",
+        message="Reset password code will be sent to your email, please check your email"
     )
 
 
-@router.put(
-    "/reset-password/{token}",
+@router.post(
+    "/reset-password",
     status_code=status.HTTP_201_CREATED,
     response_model=DefaultResponse,
 )
 def reset_password(
     request: ResetPassword,
     session: Generator = Depends(get_db),
-):
+) -> JSONResponse:
     password_validation(request.password)
     forgot_password = (
         session.query(ForgotPassword)
+        .join(User)
         .filter(ForgotPassword.token == request.token)
+        .filter(User.email == request.email)
         .first()
     )
 
@@ -165,7 +194,7 @@ def reset_password(
             detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if forgot_password.expired_at < datetime.now(tz=pytz.UTC):
+    if forgot_password.expires_in < datetime.now(tz=pytz.UTC):
 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -182,7 +211,7 @@ def reset_password(
     user.password = hashed_password
     user.salt = salt
     session.commit()
-    return DefaultResponse(message="Password reset success")
+    return DefaultResponse(message="Password updated successfully")
 
 
 @router.put(
@@ -194,17 +223,18 @@ def change_password(
     request: ChangePassword,
     session: Generator = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
-):
-    password_validation(request.new_password)
+) -> JSONResponse:
 
     if not User.verify_password(request.old_password, current_user):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect password",
+            detail="Your old password is incorrect",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    password_validation(request.new_password)
+
     hashed_password, salt = User.encrypt_password(request.new_password)
     current_user.password = hashed_password
     current_user.salt = salt
     session.commit()
-    return DefaultResponse(message="Password changed success")
+    return DefaultResponse(message="Password updated successfully")

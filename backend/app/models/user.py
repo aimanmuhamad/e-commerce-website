@@ -1,5 +1,5 @@
 import bcrypt
-from sqlalchemy import Boolean, Column, Integer, String
+from sqlalchemy import BigInteger, Boolean, Column, String
 
 from app.db import Base
 from app.models.default import DefaultModel
@@ -18,12 +18,12 @@ class User(DefaultModel, Base):
     address_name = Column(String(length=64), nullable=True)
     address = Column(String(length=128), nullable=True)
     city = Column(String(length=64), nullable=True)
-    balance = Column(Integer, nullable=False, server_default="0")
+    balance = Column(BigInteger, nullable=False, server_default="0")
 
     is_admin = Column(Boolean, nullable=False, server_default="false")
 
     @classmethod
-    def default_seed(cls, fake):
+    def default_user_seed(cls, fake):
         password, salt = cls.encrypt_password("user")
         user = User(
             id=fake.uuid4(),
@@ -32,11 +32,15 @@ class User(DefaultModel, Base):
             password=password,
             salt=salt,
             phone_number=fake.phone_number(),
-            address_name=fake.text(max_nb_chars=20),
+            address_name=fake.text(max_nb_chars=24),
             address=fake.address(),
             city=fake.city(),
             balance=fake.pyint(),
         )
+        return user
+
+    @classmethod
+    def default_admin_seed(cls, fake):
         password, salt = cls.encrypt_password("admin")
         admin = User(
             id=fake.uuid4(),
@@ -45,25 +49,25 @@ class User(DefaultModel, Base):
             password=password,
             salt=salt,
             phone_number=fake.phone_number(),
-            address_name=fake.text(max_nb_chars=20),
+            address_name=fake.text(max_nb_chars=24),
             address=fake.address(),
             city=fake.city(),
             balance=fake.pyint(),
             is_admin=True,
         )
-        return user, admin
+        return admin
 
     @classmethod
-    def seed(cls, fake):
-        password, salt = cls.encrypt_password("password")
+    def seed(cls, fake, password="password"):
+        hashed_password, salt = cls.encrypt_password(password)
         user = User(
             id=fake.uuid4(),
             name=fake.name(),
             email=fake.email(),
-            password=password,
+            password=hashed_password,
             salt=salt,
             phone_number=fake.phone_number(),
-            address_name=fake.text(max_nb_chars=20),
+            address_name=fake.text(max_nb_chars=24),
             address=fake.address(),
             city=fake.city(),
             balance=fake.pyint(),

@@ -1,9 +1,10 @@
+-- Create Archive Table
 DO $$
 DECLARE
     t text;
 BEGIN
     FOR t IN
-        SELECT table_name FROM information_schema.columns WHERE column_name = 'deleted_at' AND table_name NOT LIKE 'z_archive_%'
+        SELECT table_name FROM information_schema.columns WHERE column_name = 'deleted_at' AND table_name NOT LIKE 'z_archive_%' AND table_name NOT IN ('wishlists', 'forgot_passwords')
     LOOP
         EXECUTE format('CREATE TABLE %I
                     (CHECK (deleted_at IS NOT NULL))
@@ -12,6 +13,7 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
+-- Create Function to Archive
 CREATE OR REPLACE FUNCTION archive_record()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -31,12 +33,13 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Create Trigger to Archive
 DO $$
 DECLARE
     t text;
 BEGIN
     FOR t IN
-        SELECT table_name FROM information_schema.columns WHERE column_name = 'deleted_at' AND table_name NOT LIKE 'z_archive_%'
+        SELECT table_name FROM information_schema.columns WHERE column_name = 'deleted_at' AND table_name NOT LIKE 'z_archive_%' AND table_name NOT IN ('wishlists', 'forgot_passwords')
     LOOP
         EXECUTE format('CREATE TRIGGER trigger_archive_record
                     AFTER UPDATE OF deleted_at OR DELETE ON %I
@@ -45,7 +48,7 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
-
+-- Create Function to Restore from Archive
 CREATE OR REPLACE FUNCTION dearchive_record()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -58,6 +61,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Create Trigger to Restore from Archive
 DO $$
 DECLARE
     t text;
@@ -71,3 +75,58 @@ BEGIN
     END loop;
 END;
 $$ language 'plpgsql';
+
+-- Implement Full Text Search Function
+-- ALTER TABLE products
+-- ADD search tsvector
+-- GENERATED ALWAYS AS (
+--   setweight(to_tsvector('simple',title), 'A')  || ' ' ||
+--   setweight(to_tsvector('english',brand), 'B') :: tsvector
+
+-- ) stored;
+
+
+-- CREATE index idx_search ON products USING GIN(search);
+
+-- CREATE OR REPLACE FUNCTION search_questions(term TEXT)
+-- returns table(
+--   id UUID,
+--   title TEXT,
+--   rank REAL
+-- )
+-- as
+-- $$
+
+-- SELECT id, title,
+--   ts_rank(search, websearch_to_tsquery('english',term)) +
+--   ts_rank(search, websearch_to_tsquery('simple',term)) as rank
+-- FROM products
+-- WHERE search @@ websearch_to_tsquery('english',term)
+-- OR search @@ websearch_to_tsquery('simple',term)
+-- ORDER BY rank DESC;
+
+-- $$ language SQL;
+
+--  ALTER TABLE products
+--  ADD search TEXT
+--  GENERATED ALWAYS AS (
+
+--  ) stored;
+
+-- CREATE INDEX products_searchable_text_trgm_gist_idx on PRODUCTS
+--   USING GIST((title || ' ' || brand)  gist_trgm_ops(siglen=256));
+
+CREATE OR REPLACE FUNCTION search_products(term TEXT)
+returns table(
+  id UUID,
+  title TEXT
+)
+as
+$$
+
+SELECT p.id, p.title
+FROM products p
+JOIN categories c ON p.category_id = c.id
+WHERE term <% (p.title || ' ' || p.brand || ' ' || SPLIT_PART(c.title, '-', 1) || ' ' || SPLIT_PART(c.title, '-', 2))
+ORDER BY term <<-> (p.title || ' ' || p.brand || ' ' || SPLIT_PART(c.title, '-', 1) || ' ' || SPLIT_PART(c.title, '-', 2)) LIMIT 10;
+$$ language SQL;
